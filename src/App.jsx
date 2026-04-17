@@ -2,13 +2,6 @@ import { useState, useEffect, useCallback } from 'react'
 
 const WEBHOOK_URL = 'https://n8n.srv1287058.hstgr.cloud/webhook/dashboard'
 
-const PRESETS = [
-  { label: 'Today', getValue: () => { const t = today(); return { start: t, end: t } } },
-  { label: 'This Week', getValue: () => { const t = new Date(); const mon = new Date(t); mon.setDate(t.getDate() - t.getDay() + 1); return { start: fmt(mon), end: today() } } },
-  { label: 'This Month', getValue: () => { const t = new Date(); return { start: `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-01`, end: today() } } },
-  { label: 'Custom', getValue: null },
-]
-
 function today() {
   return fmt(new Date())
 }
@@ -17,53 +10,85 @@ function fmt(d) {
   return d.toISOString().slice(0, 10)
 }
 
-function rateColor(val) {
-  const n = parseInt(val)
-  if (n >= 70) return '#00e5a0'
-  if (n >= 40) return '#f5c842'
-  return '#ff5e5e'
+function getPresetRange(preset) {
+  const t = new Date()
+  if (preset === 'Today') {
+    const d = today()
+    return { start: d, end: d }
+  }
+  if (preset === 'This Week') {
+    const mon = new Date(t)
+    const day = t.getDay() === 0 ? 6 : t.getDay() - 1
+    mon.setDate(t.getDate() - day)
+    return { start: fmt(mon), end: today() }
+  }
+  if (preset === 'This Month') {
+    return {
+      start: `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`,
+      end: today()
+    }
+  }
+  if (preset === 'Last Month') {
+    const first = new Date(t.getFullYear(), t.getMonth() - 1, 1)
+    const last = new Date(t.getFullYear(), t.getMonth(), 0)
+    return { start: fmt(first), end: fmt(last) }
+  }
+  return null
 }
 
-function RateCell({ value }) {
-  const color = rateColor(value)
+function rateColor(val) {
+  const n = parseInt(val)
+  if (isNaN(n)) return { bg: '#f3f4f6', text: '#6b7280' }
+  if (n >= 70) return { bg: '#dcfce7', text: '#16a34a' }
+  if (n >= 40) return { bg: '#fef9c3', text: '#ca8a04' }
+  return { bg: '#fee2e2', text: '#dc2626' }
+}
+
+function StatCard({ label, value, subtitle }) {
   return (
-    <td style={{ textAlign: 'center' }}>
-      <span style={{
-        display: 'inline-block',
-        padding: '3px 10px',
-        borderRadius: '20px',
-        background: color + '18',
-        color: color,
-        fontFamily: "'DM Mono', monospace",
-        fontSize: '0.85rem',
-        fontWeight: 500,
-        border: `1px solid ${color}40`,
-        minWidth: 54,
-      }}>{value}</span>
-    </td>
+    <div style={{
+      background: '#fff',
+      border: '1px solid #e5e7eb',
+      borderRadius: 12,
+      padding: '24px 20px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 6,
+      boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+    }}>
+      <div style={{ fontSize: '0.875rem', color: '#6b7280', fontWeight: 500 }}>{label}</div>
+      <div style={{ fontSize: '2.5rem', fontWeight: 700, color: '#111827', lineHeight: 1.1 }}>{value}</div>
+      {subtitle && (
+        <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>{subtitle}</div>
+      )}
+    </div>
   )
 }
 
-function NumCell({ value }) {
+function RateBadge({ value }) {
+  const { bg, text } = rateColor(value)
   return (
-    <td style={{
-      textAlign: 'center',
-      fontFamily: "'DM Mono', monospace",
-      fontSize: '1rem',
-      fontWeight: 500,
-      color: '#e8e4dc',
-    }}>{value}</td>
+    <span style={{
+      display: 'inline-block',
+      padding: '4px 12px',
+      borderRadius: 20,
+      background: bg,
+      color: text,
+      fontSize: '0.875rem',
+      fontWeight: 600,
+    }}>{value}</span>
   )
 }
 
 export default function App() {
-  const [preset, setPreset] = useState(0)
+  const [preset, setPreset] = useState('This Month')
   const [startDate, setStartDate] = useState(() => {
     const t = new Date()
-    return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-01`
+    return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`
   })
   const [endDate, setEndDate] = useState(today)
-  const [data, setData] = useState(null)
+  const [allData, setAllData] = useState(null)
+  const [selectedUser, setSelectedUser] = useState('all')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [lastUpdated, setLastUpdated] = useState(null)
@@ -76,256 +101,191 @@ export default function App() {
       if (!res.ok) throw new Error('Failed to fetch')
       const json = await res.json()
       const payload = Array.isArray(json) ? json[0] : json
-      setData(payload)
+      setAllData(payload)
       setLastUpdated(new Date())
     } catch (e) {
-      setError('Could not load data. Check your n8n webhook is active.')
+      setError('Could not load data. Make sure your n8n workflow is active.')
     } finally {
       setLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    fetchData(startDate, endDate)
+    const range = getPresetRange('This Month')
+    fetchData(range.start, range.end)
   }, [])
 
-  // Auto-refresh every 5 minutes
   useEffect(() => {
     const id = setInterval(() => fetchData(startDate, endDate), 5 * 60 * 1000)
     return () => clearInterval(id)
   }, [startDate, endDate, fetchData])
 
-  function handlePreset(i) {
-    setPreset(i)
-    if (PRESETS[i].getValue) {
-      const { start, end } = PRESETS[i].getValue()
-      setStartDate(start)
-      setEndDate(end)
-      fetchData(start, end)
+  function handlePreset(p) {
+    setPreset(p)
+    if (p !== 'Custom') {
+      const range = getPresetRange(p)
+      setStartDate(range.start)
+      setEndDate(range.end)
+      fetchData(range.start, range.end)
     }
   }
 
-  function handleCustomSearch() {
-    fetchData(startDate, endDate)
-  }
+  const results = allData?.results || []
+  const userOptions = [{ userId: 'all', name: 'All Closers' }, ...results]
+  const filtered = selectedUser === 'all' ? results : results.filter(r => r.userId === selectedUser)
 
-  const results = data?.results || []
+  const totals = filtered.reduce((acc, r) => ({
+    demosSet: acc.demosSet + r.demosSet,
+    demosConducted: acc.demosConducted + r.demosConducted,
+    onboardingsBooked: acc.onboardingsBooked + r.onboardingsBooked,
+    trialsClosed: acc.trialsClosed + r.trialsClosed,
+  }), { demosSet: 0, demosConducted: 0, onboardingsBooked: 0, trialsClosed: 0 })
+
+  const showRate = totals.demosSet > 0 ? Math.round((totals.demosConducted / totals.demosSet) * 100) + '%' : '0%'
+  const closeRate = totals.demosConducted > 0 ? Math.round((totals.onboardingsBooked / totals.demosConducted) * 100) + '%' : '0%'
+  const obTrialRate = totals.onboardingsBooked > 0 ? Math.round((totals.trialsClosed / totals.onboardingsBooked) * 100) + '%' : '0%'
+
+  const presets = ['Today', 'This Week', 'This Month', 'Last Month', 'Custom']
 
   return (
-    <div style={{
-      minHeight: '100vh',
-      background: '#0e0d0b',
-      color: '#e8e4dc',
-      fontFamily: "'Syne', sans-serif",
-      padding: '0',
-    }}>
-      {/* Noise overlay */}
+    <div style={{ minHeight: '100vh', background: '#f9fafb', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>
+
       <div style={{
-        position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 0,
-        backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E")`,
-        opacity: 0.4,
-      }} />
+        background: '#fff',
+        borderBottom: '1px solid #e5e7eb',
+        padding: '0 32px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+        height: 56,
+        gap: 12,
+      }}>
+        {lastUpdated && (
+          <span style={{ fontSize: '0.75rem', color: '#9ca3af' }}>
+            Updated {lastUpdated.toLocaleTimeString()}
+          </span>
+        )}
+        <button
+          onClick={() => fetchData(startDate, endDate)}
+          disabled={loading}
+          style={{
+            background: '#fff', border: '1px solid #d1d5db', borderRadius: 8,
+            padding: '8px 16px', fontSize: '0.875rem', color: '#374151',
+            cursor: loading ? 'not-allowed' : 'pointer', fontWeight: 500,
+          }}
+        >
+          {loading ? 'Loading...' : '↻ Refresh'}
+        </button>
+      </div>
 
-      <div style={{ position: 'relative', zIndex: 1, maxWidth: 1100, margin: '0 auto', padding: '48px 24px' }}>
+      <div style={{ padding: '28px 32px', maxWidth: 1200, margin: '0 auto' }}>
 
-        {/* Header */}
-        <div style={{ marginBottom: 48 }}>
-          <div style={{
-            display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between',
-            borderBottom: '1px solid #2a2820', paddingBottom: 24, marginBottom: 8,
-          }}>
-            <div>
-              <div style={{
-                fontSize: '0.7rem', letterSpacing: '0.2em', color: '#6b6456',
-                textTransform: 'uppercase', marginBottom: 8, fontFamily: "'DM Mono', monospace",
-              }}>
-                Home Seller Leads
-              </div>
-              <h1 style={{
-                fontSize: 'clamp(2rem, 5vw, 3.5rem)', fontWeight: 800,
-                margin: 0, lineHeight: 1,
-                background: 'linear-gradient(135deg, #e8e4dc 0%, #a09880 100%)',
-                WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-                letterSpacing: '-0.02em',
-              }}>
-                Closer Dashboard
-              </h1>
-            </div>
-            <div style={{ textAlign: 'right' }}>
-              {lastUpdated && (
-                <div style={{ fontSize: '0.7rem', color: '#4a4540', fontFamily: "'DM Mono', monospace" }}>
-                  Updated {lastUpdated.toLocaleTimeString()}
-                </div>
-              )}
+        <div style={{ display: 'flex', gap: 12, marginBottom: 28, flexWrap: 'wrap', alignItems: 'center' }}>
+          <select
+            value={selectedUser}
+            onChange={e => setSelectedUser(e.target.value)}
+            style={{
+              border: '1px solid #d1d5db', borderRadius: 8, padding: '9px 14px',
+              fontSize: '0.875rem', color: '#374151', background: '#fff',
+              cursor: 'pointer', outline: 'none', minWidth: 160,
+            }}
+          >
+            {userOptions.map(u => (
+              <option key={u.userId} value={u.userId}>{u.name}</option>
+            ))}
+          </select>
+
+          <div style={{ display: 'flex', border: '1px solid #d1d5db', borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
+            {presets.map((p, i) => (
+              <button
+                key={p}
+                onClick={() => handlePreset(p)}
+                style={{
+                  padding: '9px 16px', border: 'none',
+                  borderRight: i < presets.length - 1 ? '1px solid #d1d5db' : 'none',
+                  background: preset === p ? '#111827' : '#fff',
+                  color: preset === p ? '#fff' : '#374151',
+                  fontSize: '0.875rem', fontWeight: 500, cursor: 'pointer',
+                }}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+
+          {preset === 'Custom' && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input
+                type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
+                style={{ border: '1px solid #d1d5db', borderRadius: 8, padding: '9px 12px', fontSize: '0.875rem', color: '#374151', background: '#fff', outline: 'none' }}
+              />
+              <span style={{ color: '#9ca3af' }}>→</span>
+              <input
+                type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
+                style={{ border: '1px solid #d1d5db', borderRadius: 8, padding: '9px 12px', fontSize: '0.875rem', color: '#374151', background: '#fff', outline: 'none' }}
+              />
               <button
                 onClick={() => fetchData(startDate, endDate)}
-                disabled={loading}
-                style={{
-                  marginTop: 8, background: 'none', border: '1px solid #2a2820',
-                  color: '#6b6456', padding: '6px 14px', borderRadius: 6,
-                  cursor: loading ? 'not-allowed' : 'pointer', fontSize: '0.75rem',
-                  fontFamily: "'DM Mono', monospace", letterSpacing: '0.05em',
-                  transition: 'all 0.2s',
-                }}
-                onMouseEnter={e => { e.target.style.borderColor = '#e8e4dc'; e.target.style.color = '#e8e4dc' }}
-                onMouseLeave={e => { e.target.style.borderColor = '#2a2820'; e.target.style.color = '#6b6456' }}
+                style={{ background: '#111827', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 18px', fontSize: '0.875rem', fontWeight: 600, cursor: 'pointer' }}
               >
-                {loading ? 'Loading...' : '↻ Refresh'}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Date Controls */}
-        <div style={{ marginBottom: 40, display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
-          {PRESETS.map((p, i) => (
-            <button
-              key={p.label}
-              onClick={() => handlePreset(i)}
-              style={{
-                padding: '8px 18px', borderRadius: 6, border: 'none',
-                cursor: 'pointer', fontSize: '0.8rem', fontFamily: "'Syne', sans-serif",
-                fontWeight: 600, letterSpacing: '0.05em', transition: 'all 0.2s',
-                background: preset === i ? '#e8e4dc' : '#1a1916',
-                color: preset === i ? '#0e0d0b' : '#6b6456',
-              }}
-            >
-              {p.label}
-            </button>
-          ))}
-
-          {preset === 3 && (
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <input
-                type="date"
-                value={startDate}
-                onChange={e => setStartDate(e.target.value)}
-                style={{
-                  background: '#1a1916', border: '1px solid #2a2820', color: '#e8e4dc',
-                  padding: '7px 12px', borderRadius: 6, fontSize: '0.8rem',
-                  fontFamily: "'DM Mono', monospace", outline: 'none',
-                }}
-              />
-              <span style={{ color: '#4a4540', fontFamily: "'DM Mono', monospace" }}>→</span>
-              <input
-                type="date"
-                value={endDate}
-                onChange={e => setEndDate(e.target.value)}
-                style={{
-                  background: '#1a1916', border: '1px solid #2a2820', color: '#e8e4dc',
-                  padding: '7px 12px', borderRadius: 6, fontSize: '0.8rem',
-                  fontFamily: "'DM Mono', monospace", outline: 'none',
-                }}
-              />
-              <button
-                onClick={handleCustomSearch}
-                style={{
-                  background: '#e8e4dc', color: '#0e0d0b', border: 'none',
-                  padding: '8px 18px', borderRadius: 6, cursor: 'pointer',
-                  fontSize: '0.8rem', fontWeight: 700, fontFamily: "'Syne', sans-serif",
-                }}
-              >
-                Search
+                Apply
               </button>
             </div>
           )}
-
-          <div style={{ marginLeft: 'auto', fontSize: '0.75rem', color: '#4a4540', fontFamily: "'DM Mono', monospace" }}>
-            {startDate} → {endDate}
-          </div>
         </div>
 
-        {/* Error */}
         {error && (
-          <div style={{
-            background: '#ff5e5e18', border: '1px solid #ff5e5e40', borderRadius: 8,
-            padding: '16px 20px', color: '#ff5e5e', marginBottom: 24,
-            fontFamily: "'DM Mono', monospace", fontSize: '0.85rem',
-          }}>
+          <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 8, padding: '14px 18px', color: '#dc2626', marginBottom: 24, fontSize: '0.875rem' }}>
             {error}
           </div>
         )}
 
-        {/* Loading skeleton */}
-        {loading && !data && (
-          <div style={{ textAlign: 'center', padding: '80px 0', color: '#4a4540', fontFamily: "'DM Mono', monospace" }}>
-            Loading...
-          </div>
-        )}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 16, marginBottom: 28 }}>
+          <StatCard label="Demo's Booked" value={loading ? '...' : totals.demosSet} />
+          <StatCard label="Demo's Conducted" value={loading ? '...' : totals.demosConducted} />
+          <StatCard label="Onboarding's Booked" value={loading ? '...' : totals.onboardingsBooked} />
+          <StatCard label="Trials Closed" value={loading ? '...' : totals.trialsClosed} />
+          <StatCard label="Show Rate" value={loading ? '...' : showRate} subtitle="Conducted / Booked" />
+          <StatCard label="Close Rate" value={loading ? '...' : closeRate} subtitle="Onboardings / Conducted" />
+          <StatCard label="OB → Trial Rate" value={loading ? '...' : obTrialRate} subtitle="Trials / Onboardings" />
+        </div>
 
-        {/* Table */}
-        {results.length > 0 && (
-          <div style={{
-            background: '#13120f', border: '1px solid #2a2820', borderRadius: 12,
-            overflow: 'hidden',
-          }}>
+        {selectedUser === 'all' && results.length > 1 && (
+          <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+            <div style={{ padding: '18px 24px', borderBottom: '1px solid #e5e7eb' }}>
+              <h2 style={{ margin: 0, fontSize: '1rem', fontWeight: 600, color: '#111827' }}>Leaderboard</h2>
+            </div>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
-                <tr style={{ borderBottom: '1px solid #2a2820' }}>
-                  {[
-                    ['Closer', 'left'],
-                    ['Demos Set', 'center'],
-                    ['Demos Done', 'center'],
-                    ['Onboardings', 'center'],
-                    ['Trials', 'center'],
-                    ['Show Rate', 'center'],
-                    ['Close Rate', 'center'],
-                    ['OB → Trial', 'center'],
-                  ].map(([label, align]) => (
-                    <th key={label} style={{
-                      padding: '16px 20px', textAlign: align,
-                      fontSize: '0.65rem', letterSpacing: '0.15em',
-                      color: '#4a4540', textTransform: 'uppercase',
-                      fontWeight: 600, fontFamily: "'DM Mono', monospace",
-                    }}>
-                      {label}
-                    </th>
+                <tr style={{ background: '#f9fafb' }}>
+                  {['Closer', 'Demos Set', 'Demos Done', 'Onboardings', 'Trials', 'Show Rate', 'Close Rate', 'OB→Trial'].map((h, i) => (
+                    <th key={h} style={{ padding: '12px 16px', textAlign: i === 0 ? 'left' : 'center', fontSize: '0.75rem', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #e5e7eb' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {results
-                  .sort((a, b) => b.trialsClosed - a.trialsClosed)
-                  .map((row, i) => (
-                  <tr
-                    key={row.userId}
-                    style={{
-                      borderBottom: i < results.length - 1 ? '1px solid #1e1d1a' : 'none',
-                      transition: 'background 0.15s',
-                    }}
-                    onMouseEnter={e => e.currentTarget.style.background = '#1a1916'}
-                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                {[...results].sort((a, b) => b.trialsClosed - a.trialsClosed).map((row, i) => (
+                  <tr key={row.userId} style={{ borderBottom: i < results.length - 1 ? '1px solid #f3f4f6' : 'none' }}
+                    onMouseEnter={e => e.currentTarget.style.background = '#f9fafb'}
+                    onMouseLeave={e => e.currentTarget.style.background = '#fff'}
                   >
-                    <td style={{ padding: '18px 20px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                        <div style={{
-                          width: 34, height: 34, borderRadius: '50%',
-                          background: `hsl(${(row.userId.charCodeAt(0) * 37) % 360}, 35%, 25%)`,
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          fontSize: '0.8rem', fontWeight: 700, color: '#e8e4dc', flexShrink: 0,
-                        }}>
+                    <td style={{ padding: '14px 16px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <div style={{ width: 32, height: 32, borderRadius: '50%', background: `hsl(${(row.name.charCodeAt(0) * 47) % 360}, 60%, 85%)`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 700, color: `hsl(${(row.name.charCodeAt(0) * 47) % 360}, 60%, 30%)`, flexShrink: 0 }}>
                           {row.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
                         </div>
-                        <div>
-                          <div style={{ fontWeight: 700, fontSize: '0.95rem' }}>{row.name}</div>
-                          {i === 0 && results.length > 1 && (
-                            <div style={{
-                              fontSize: '0.6rem', color: '#f5c842', letterSpacing: '0.1em',
-                              textTransform: 'uppercase', fontFamily: "'DM Mono', monospace",
-                            }}>
-                              ★ Top Performer
-                            </div>
-                          )}
-                        </div>
+                        <span style={{ fontWeight: 600, color: '#111827', fontSize: '0.9rem' }}>{row.name}</span>
+                        {i === 0 && <span style={{ fontSize: '0.7rem', background: '#fef9c3', color: '#ca8a04', padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>Top</span>}
                       </div>
                     </td>
-                    <NumCell value={row.demosSet} />
-                    <NumCell value={row.demosConducted} />
-                    <NumCell value={row.onboardingsBooked} />
-                    <NumCell value={row.trialsClosed} />
-                    <RateCell value={row.showRate} />
-                    <RateCell value={row.closeRate} />
-                    <RateCell value={row.obToTrialRate} />
+                    {[row.demosSet, row.demosConducted, row.onboardingsBooked, row.trialsClosed].map((v, j) => (
+                      <td key={j} style={{ padding: '14px 16px', textAlign: 'center', fontWeight: 600, color: '#111827', fontSize: '0.95rem' }}>{v}</td>
+                    ))}
+                    {[row.showRate, row.closeRate, row.obToTrialRate].map((v, j) => (
+                      <td key={j} style={{ padding: '14px 16px', textAlign: 'center' }}>
+                        <RateBadge value={v} />
+                      </td>
+                    ))}
                   </tr>
                 ))}
               </tbody>
@@ -333,28 +293,11 @@ export default function App() {
           </div>
         )}
 
-        {/* Empty state */}
         {!loading && results.length === 0 && !error && (
-          <div style={{
-            textAlign: 'center', padding: '80px 0',
-            color: '#4a4540', fontFamily: "'DM Mono', monospace", fontSize: '0.85rem',
-          }}>
-            No data for this period.
+          <div style={{ textAlign: 'center', padding: '60px 0', color: '#9ca3af', fontSize: '0.9rem' }}>
+            No data found for this period.
           </div>
         )}
-
-        {/* Footer */}
-        <div style={{
-          marginTop: 48, paddingTop: 24, borderTop: '1px solid #1e1d1a',
-          display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8,
-        }}>
-          <div style={{ fontSize: '0.65rem', color: '#2a2820', fontFamily: "'DM Mono', monospace" }}>
-            Auto-refreshes every 5 minutes
-          </div>
-          <div style={{ fontSize: '0.65rem', color: '#2a2820', fontFamily: "'DM Mono', monospace" }}>
-            🟢 ≥70% &nbsp; 🟡 40–69% &nbsp; 🔴 &lt;40%
-          </div>
-        </div>
 
       </div>
     </div>
